@@ -5,6 +5,7 @@ from quart import Quart, jsonify, request
 
 from adb_shell.adb_device import AdbDeviceUsb
 from adb_shell.adb_device_async import AdbDeviceTcpAsync
+from adb_shell.transport.usb_transport import UsbTransport
 from adb_shell.exceptions import AdbConnectionError, AdbTimeoutError, UsbDeviceNotFoundError
 
 # --- Basic Logging Setup ---
@@ -44,7 +45,7 @@ class AdbClient:
             _LOGGER.error(f"ADB Error on shell command '{command}': {e}")
             return {"error": str(e)}, 500
         except Exception as e:
-            _LOGGER.error(f"Unexpected error on shell command '{command}': {e}")
+            _LOGGER.error(f"Unexpected error on shell command '{command}': {e}", exc_info=True)
             return {"error": str(e)}, 500
 
 
@@ -62,7 +63,7 @@ class AdbClient:
             _LOGGER.error(f"ADB Error on tcpip command: {e}")
             return {"error": str(e)}, 500
         except Exception as e:
-            _LOGGER.error(f"Unexpected error on tcpip command: {e}")
+            _LOGGER.error(f"Unexpected error on tcpip command: {e}", exc_info=True)
             return {"error": str(e)}, 500
 
 # --- Quart Web Application ---
@@ -77,10 +78,28 @@ async def startup():
     adb_client = AdbClient(loop)
     _LOGGER.info("Frameo ADB Client Initialized and ready.")
 
+# --- API Endpoints ---
 @app.route("/health")
 async def health_check():
     """Health check endpoint to verify the add-on is running."""
     return jsonify({"status": "ok"})
+
+@app.route("/devices/usb")
+async def get_usb_devices():
+    """Scan for and return connected USB ADB devices."""
+    _LOGGER.info("Request received for /devices/usb")
+    try:
+        loop = asyncio.get_running_loop()
+        devices = await loop.run_in_executor(None, UsbTransport.find_all_adb_devices)
+        serials = [dev.serial_number for dev in devices]
+        _LOGGER.info(f"Discovered USB devices: {serials}")
+        return jsonify(serials)
+    except UsbDeviceNotFoundError:
+        _LOGGER.warning("No USB devices found during scan.")
+        return jsonify([])
+    except Exception as e:
+        _LOGGER.error(f"Error finding USB devices: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/state", methods=["GET"])
 async def get_state():

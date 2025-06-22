@@ -9,20 +9,12 @@ arch:
   - amd64
   - armv7
 init: false
+icon: "mdi:image-frame"
 # Grant access to the host's USB devices
 usb: true
 # Expose the API port to Home Assistant
 ports:
   "5000/tcp": 5000
-# User-configurable options
 options:
-  connection_type: "USB"
-  device_serial: ""
-  device_host: "192.168.1.100"
-  device_port: 5555
 schema:
-  connection_type: list(USB|Network)
-  device_serial: str?
-  device_host: str
-  device_port: port
 #image: "ghcr.io/hunorlaczko/{arch}-addon-frameo-control"
