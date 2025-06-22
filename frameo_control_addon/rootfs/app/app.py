@@ -5,7 +5,7 @@ from quart import Quart, jsonify, request
 
 from adb_shell.adb_device import AdbDeviceUsb
 from adb_shell.adb_device_async import AdbDeviceTcpAsync
-from adb_shell.exceptions import AdbError
+from adb_shell.exceptions import AdbConnectionError, AdbTimeoutError, UsbDeviceNotFoundError
 
 # --- Basic Logging Setup ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -40,9 +40,13 @@ class AdbClient:
             if self.conn_type == "USB":
                 return await self._run_sync(self.device.shell, command)
             return await self.device.shell(command)
-        except AdbError as e:
+        except (AdbConnectionError, AdbTimeoutError, UsbDeviceNotFoundError) as e:
             _LOGGER.error(f"ADB Error on shell command '{command}': {e}")
             return {"error": str(e)}, 500
+        except Exception as e:
+            _LOGGER.error(f"Unexpected error on shell command '{command}': {e}")
+            return {"error": str(e)}, 500
+
 
     async def tcpip(self, port):
         """Enable Wireless ADB on a USB device."""
@@ -54,8 +58,11 @@ class AdbClient:
             _LOGGER.info(f"Enabling wireless ADB on port {port}")
             await self._run_sync(self.device.tcpip, port)
             return {"status": "Wireless ADB enabled"}
-        except AdbError as e:
+        except (AdbConnectionError, AdbTimeoutError, UsbDeviceNotFoundError) as e:
             _LOGGER.error(f"ADB Error on tcpip command: {e}")
+            return {"error": str(e)}, 500
+        except Exception as e:
+            _LOGGER.error(f"Unexpected error on tcpip command: {e}")
             return {"error": str(e)}, 500
 
 # --- Quart Web Application ---
@@ -80,7 +87,7 @@ async def get_state():
     """Get the current screen state and brightness."""
     _LOGGER.info("Request received for /state")
     state_result = await adb_client.shell("dumpsys power")
-    if isinstance(state_result, tuple):
+    if isinstance(state_result, tuple) and "error" in state_result[0]:
         return jsonify(state_result[0]), state_result[1]
         
     is_on = "mWakefulness=Awake" in state_result
@@ -103,7 +110,7 @@ async def run_shell_command():
         return jsonify({"error": "Command not provided"}), 400
 
     result = await adb_client.shell(command)
-    if isinstance(result, tuple):
+    if isinstance(result, tuple) and "error" in result[0]:
         return jsonify(result[0]), result[1]
     
     return jsonify({"result": result})
@@ -113,7 +120,7 @@ async def enable_tcpip():
     """Endpoint to enable Wireless ADB."""
     _LOGGER.info("Request received for /tcpip")
     result = await adb_client.tcpip(5555)
-    if isinstance(result, tuple):
+    if isinstance(result, tuple) and "error" in result[0]:
         return jsonify(result[0]), result[1]
     return jsonify(result)
 
