@@ -1,10 +1,15 @@
 import os
 import asyncio
+import logging
 from quart import Quart, jsonify, request
 
 from adb_shell.adb_device import AdbDeviceUsb
 from adb_shell.adb_device_async import AdbDeviceTcpAsync
 from adb_shell.exceptions import AdbError
+
+# --- Basic Logging Setup ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+_LOGGER = logging.getLogger(__name__)
 
 # --- ADB Client Wrapper ---
 class AdbClient:
@@ -12,13 +17,16 @@ class AdbClient:
     def __init__(self, loop):
         self._loop = loop
         self.conn_type = os.getenv("CONNECTION_TYPE", "USB")
+        _LOGGER.info(f"Initializing ADB client for {self.conn_type} connection.")
         
         if self.conn_type == "USB":
             serial = os.getenv("DEVICE_SERIAL") or None
+            _LOGGER.info(f"Using USB with serial: {serial or 'any'}")
             self.device = AdbDeviceUsb(serial=serial, default_transport_timeout_s=9.0)
         else:
             host = os.getenv("DEVICE_HOST")
             port = int(os.getenv("DEVICE_PORT", 5555))
+            _LOGGER.info(f"Using Network with host: {host}:{port}")
             self.device = AdbDeviceTcpAsync(host=host, port=port, default_transport_timeout_s=9.0)
 
     async def _run_sync(self, func, *args):
@@ -27,21 +35,27 @@ class AdbClient:
 
     async def shell(self, command):
         """Execute a shell command."""
+        _LOGGER.info(f"Executing shell command: '{command}'")
         try:
             if self.conn_type == "USB":
                 return await self._run_sync(self.device.shell, command)
             return await self.device.shell(command)
         except AdbError as e:
+            _LOGGER.error(f"ADB Error on shell command '{command}': {e}")
             return {"error": str(e)}, 500
 
     async def tcpip(self, port):
         """Enable Wireless ADB on a USB device."""
         if self.conn_type != "USB":
-            return {"error": "tcpip can only be enabled on a USB connection"}, 400
+            msg = "tcpip can only be enabled on a USB connection"
+            _LOGGER.error(msg)
+            return {"error": msg}, 400
         try:
+            _LOGGER.info(f"Enabling wireless ADB on port {port}")
             await self._run_sync(self.device.tcpip, port)
             return {"status": "Wireless ADB enabled"}
         except AdbError as e:
+            _LOGGER.error(f"ADB Error on tcpip command: {e}")
             return {"error": str(e)}, 500
 
 # --- Quart Web Application ---
@@ -54,7 +68,7 @@ async def startup():
     global adb_client
     loop = asyncio.get_running_loop()
     adb_client = AdbClient(loop)
-    print("Frameo ADB Client Initialized.")
+    _LOGGER.info("Frameo ADB Client Initialized and ready.")
 
 @app.route("/health")
 async def health_check():
@@ -64,6 +78,7 @@ async def health_check():
 @app.route("/state", methods=["GET"])
 async def get_state():
     """Get the current screen state and brightness."""
+    _LOGGER.info("Request received for /state")
     state_result = await adb_client.shell("dumpsys power")
     if isinstance(state_result, tuple):
         return jsonify(state_result[0]), state_result[1]
@@ -96,6 +111,7 @@ async def run_shell_command():
 @app.route("/tcpip", methods=["POST"])
 async def enable_tcpip():
     """Endpoint to enable Wireless ADB."""
+    _LOGGER.info("Request received for /tcpip")
     result = await adb_client.tcpip(5555)
     if isinstance(result, tuple):
         return jsonify(result[0]), result[1]
