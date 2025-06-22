@@ -15,6 +15,6 @@ usb: true
 # Expose the API port to Home Assistant
 ports:
   "5000/tcp": 5000
-options:
-schema:
+options: {}
+schema: {}
 #image: "ghcr.io/hunorlaczko/{arch}-addon-frameo-control"
