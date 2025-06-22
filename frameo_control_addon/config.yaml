@@ -25,4 +25,4 @@ schema:
   device_serial: str?
   device_host: str
   device_port: port
-image: "ghcr.io/hunorlaczko/{arch}-addon-frameo-control"
+#image: "ghcr.io/hunorlaczko/{arch}-addon-frameo-control"
