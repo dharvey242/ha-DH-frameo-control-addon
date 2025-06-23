@@ -31,6 +31,10 @@ async def _get_device_from_request(data):
         return AdbDeviceTcpAsync(host=host, port=port, default_transport_timeout_s=9.0)
     return None
 
+def _auth_callback_sync(device):
+    """Log a message when auth is needed."""
+    _LOGGER.info("Please check your device screen to 'Allow USB Debugging' from this computer.")
+
 async def _execute_command(data, command, *args):
     """Create, connect, execute a command, and close the connection."""
     device = await _get_device_from_request(data)
@@ -40,15 +44,15 @@ async def _execute_command(data, command, *args):
     try:
         conn_type = data.get("connection_type")
         if conn_type == "USB":
-            await _run_sync(device.connect)
+            await _run_sync(device.connect, rsa_keys=None, auth_timeout_s=60.0, auth_callback=_auth_callback_sync)
             cmd_func = getattr(device, command)
             result = await _run_sync(cmd_func, *args)
         else: # Network
-            await device.connect()
+            await device.connect(rsa_keys=None, auth_timeout_s=10.0)
             cmd_func = getattr(device, command)
             result = await cmd_func(*args)
         
-        return {"result": result}
+        return {"result": result}, 200
 
     except (AdbConnectionError, AdbTimeoutError, UsbDeviceNotFoundError) as e:
         _LOGGER.error(f"ADB Error during '{command}': {e}")
