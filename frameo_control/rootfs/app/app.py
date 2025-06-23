@@ -4,6 +4,7 @@ import logging
 import re
 from functools import partial
 from quart import Quart, jsonify, request
+import usb1
 
 from adb_shell.adb_device import AdbDeviceUsb
 from adb_shell.adb_device_async import AdbDeviceTcpAsync
@@ -64,17 +65,28 @@ async def _execute_command(data, command, *args):
     try:
         conn_type = data.get("connection_type")
         if conn_type == "USB":
-            await _run_sync(device.connect, rsa_keys=[signer], auth_timeout_s=60.0, auth_callback=_auth_callback_sync)
+            # Retry loop for USB connection to handle LIBUSB_ERROR_BUSY
+            for attempt in range(1, 4):
+                try:
+                    await _run_sync(device.connect, rsa_keys=[signer], auth_timeout_s=60.0, auth_callback=_auth_callback_sync)
+                    _LOGGER.info("USB device connected successfully on attempt %d.", attempt)
+                    break  # Exit loop on success
+                except usb1.USBErrorBusy:
+                    _LOGGER.warning("USB device is busy, retrying... (attempt %d/3)", attempt)
+                    if attempt == 3:
+                        raise  # Re-raise the exception on the last attempt
+                    await asyncio.sleep(2)  # Wait before retrying
+
             cmd_func = getattr(device, command)
             result = await _run_sync(cmd_func, *args)
-        else:
+        else: # Network
             await device.connect(rsa_keys=[signer], auth_timeout_s=10.0)
             cmd_func = getattr(device, command)
             result = await cmd_func(*args)
         
         return {"result": result}, 200
 
-    except (AdbConnectionError, AdbTimeoutError, UsbDeviceNotFoundError) as e:
+    except (AdbConnectionError, AdbTimeoutError, UsbDeviceNotFoundError, usb1.USBError) as e:
         _LOGGER.error(f"ADB Error during '{command}': {e}")
         return {"error": str(e)}, 500
     except Exception as e:
