@@ -1,7 +1,8 @@
 import os
+import re
 import asyncio
 import logging
-import re
+import functools
 from quart import Quart, jsonify, request
 
 from adb_shell.adb_device import AdbDeviceUsb
@@ -14,10 +15,10 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 _LOGGER = logging.getLogger(__name__)
 
 # --- Helper Functions ---
-async def _run_sync(func, *args):
+async def _run_sync(func, *args, **kwargs):
     """Run a synchronous (blocking) function in an executor."""
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, func, *args)
+    return await loop.run_in_executor(None, functools.partial(func, *args, **kwargs))
 
 async def _get_device_from_request(data):
     """Create a device object from request data."""
@@ -44,11 +45,11 @@ async def _execute_command(data, command, *args):
     try:
         conn_type = data.get("connection_type")
         if conn_type == "USB":
-            await _run_sync(device.connect, auth_timeout_s=60.0, auth_callback=_auth_callback_sync)
+            await _run_sync(device.connect, rsa_keys=None, auth_timeout_s=60.0, auth_callback=_auth_callback_sync)
             cmd_func = getattr(device, command)
             result = await _run_sync(cmd_func, *args)
         else: # Network
-            await device.connect(auth_timeout_s=10.0)
+            await device.connect(rsa_keys=None, auth_timeout_s=10.0)
             cmd_func = getattr(device, command)
             result = await cmd_func(*args)
         
