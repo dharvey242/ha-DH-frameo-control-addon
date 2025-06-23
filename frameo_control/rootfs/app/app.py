@@ -1,24 +1,43 @@
 import os
-import re
 import asyncio
 import logging
-import functools
+import re
+from functools import partial
 from quart import Quart, jsonify, request
 
 from adb_shell.adb_device import AdbDeviceUsb
 from adb_shell.adb_device_async import AdbDeviceTcpAsync
 from adb_shell.transport.usb_transport import UsbTransport
 from adb_shell.exceptions import AdbConnectionError, AdbTimeoutError, UsbDeviceNotFoundError
+from adb_shell.auth.keygen import keygen
+from adb_shell.auth.sign_pythonrsa import PythonRSASigner
 
 # --- Basic Logging Setup ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 _LOGGER = logging.getLogger(__name__)
 
+# --- Global Signer ---
+signer = None
+
 # --- Helper Functions ---
+def _load_or_generate_keys():
+    """Load ADB keys from /data/adbkey, or generate them if they don't exist."""
+    adb_key_path = "/data/adbkey"
+    if not os.path.exists(adb_key_path):
+        _LOGGER.info("No ADB key found, generating a new one at %s", adb_key_path)
+        keygen(adb_key_path)
+    
+    _LOGGER.info("Loading ADB key from %s", adb_key_path)
+    with open(adb_key_path) as f:
+        priv = f.read()
+    with open(adb_key_path + ".pub") as f:
+        pub = f.read()
+    return PythonRSASigner(pub, priv)
+
 async def _run_sync(func, *args, **kwargs):
     """Run a synchronous (blocking) function in an executor."""
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, functools.partial(func, *args, **kwargs))
+    return await loop.run_in_executor(None, partial(func, *args, **kwargs))
 
 async def _get_device_from_request(data):
     """Create a device object from request data."""
@@ -45,11 +64,11 @@ async def _execute_command(data, command, *args):
     try:
         conn_type = data.get("connection_type")
         if conn_type == "USB":
-            await _run_sync(device.connect, rsa_keys=None, auth_timeout_s=60.0, auth_callback=_auth_callback_sync)
+            await _run_sync(device.connect, rsa_keys=[signer], auth_timeout_s=60.0, auth_callback=_auth_callback_sync)
             cmd_func = getattr(device, command)
             result = await _run_sync(cmd_func, *args)
-        else: # Network
-            await device.connect(rsa_keys=None, auth_timeout_s=10.0)
+        else:
+            await device.connect(rsa_keys=[signer], auth_timeout_s=10.0)
             cmd_func = getattr(device, command)
             result = await cmd_func(*args)
         
@@ -70,6 +89,13 @@ async def _execute_command(data, command, *args):
 
 # --- Quart Web Application ---
 app = Quart(__name__)
+
+@app.before_serving
+async def startup():
+    """Initialize the ADB signer before starting the server."""
+    global signer
+    signer = await _run_sync(_load_or_generate_keys)
+    _LOGGER.info("Frameo ADB Client Initialized and ready.")
 
 # --- API Endpoints ---
 @app.route("/health")
