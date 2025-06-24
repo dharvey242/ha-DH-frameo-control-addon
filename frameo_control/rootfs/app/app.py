@@ -163,6 +163,8 @@ async def get_ip_address():
 @app.route("/tcpip", methods=["POST"])
 async def enable_tcpip():
     """Enables wireless debugging with automatic reconnection."""
+    global adb_client
+    
     _LOGGER.info("Request received for /tcpip")
 
     if not await _ensure_connection():
@@ -177,7 +179,6 @@ async def enable_tcpip():
         return jsonify({"result": result.strip()}), 200
     except (AdbConnectionError, AdbTimeoutError, ConnectionResetError, usb1.USBError) as e:
         _LOGGER.error(f"ADB Error on tcpip command: {e}. Marking connection as lost.")
-        global adb_client
         adb_client = None # Mark connection as dead
         return jsonify({"error": str(e)}), 500
 
