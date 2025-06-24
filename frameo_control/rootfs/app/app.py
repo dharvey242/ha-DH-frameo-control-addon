@@ -21,8 +21,6 @@ _LOGGER = logging.getLogger(__name__)
 signer = None
 adb_client = None
 is_usb = False
-connection_details_store = {}
-connection_lock = asyncio.Lock()
 
 # --- Helper Functions ---
 def _load_or_generate_keys():
@@ -47,9 +45,51 @@ def _auth_callback_sync(device_client):
     """Log a message when auth is needed. This is only for sync (USB) connections."""
     _LOGGER.info("!!!!!! ACTION REQUIRED !!!!!! Please check your device's screen to 'Allow USB Debugging'.")
 
-async def _do_connect(conn_details):
+# --- Quart Web Application ---
+app = Quart(__name__)
+
+@app.before_serving
+async def startup():
+    """Initialize the ADB signer before starting the server."""
+    global signer
+    signer = await _run_sync(_load_or_generate_keys)
+    _LOGGER.info("Frameo ADB Server Initialized and ready for connection requests.")
+
+# --- API Endpoints ---
+@app.route("/health", methods=["GET"])
+async def health_check():
+    """Check the health of the addon and its connection."""
+    global adb_client
+    if adb_client and adb_client.available:
+        return jsonify({"status": "connected"})
+    return jsonify({"status": "disconnected"})
+
+@app.route("/devices/usb", methods=["GET"])
+async def get_usb_devices():
+    """Scan for and return connected USB ADB devices."""
+    _LOGGER.info("Request received for /devices/usb")
+    try:
+        devices = await _run_sync(UsbTransport.find_all_adb_devices)
+        serials = [dev.serial_number for dev in devices]
+        _LOGGER.info(f"Discovered USB devices: {serials}")
+        return jsonify(serials)
+    except UsbDeviceNotFoundError:
+        _LOGGER.warning("No USB devices found during scan.")
+        return jsonify([])
+    except Exception as e:
+        _LOGGER.error(f"Error finding USB devices: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/connect", methods=["POST"])
+async def connect_device():
+    """Explicitly connect to a device. This sets the global adb_client."""
     global adb_client, is_usb
+    conn_details = await request.get_json()
+    if not conn_details:
+        return jsonify({"error": "Connection details not provided"}), 400
+
     conn_type = conn_details.get("connection_type", "USB").upper()
+    _LOGGER.info(f"Attempting to connect via {conn_type} with details: {conn_details}")
 
     try:
         # Close any existing connection before creating a new one
@@ -61,86 +101,62 @@ async def _do_connect(conn_details):
         if conn_type == "USB":
             is_usb = True
             serial = conn_details.get("serial")
+            if not serial:
+                return jsonify({"error": "USB connection requires a serial number."}), 400
+            
+            # USB connection is synchronous, so we instantiate the sync class
             adb_client = AdbDeviceUsb(serial=serial, default_transport_timeout_s=9.0)
             await _run_sync(adb_client.connect, rsa_keys=[signer], auth_timeout_s=120.0, auth_callback=_auth_callback_sync)
-        else:
+        
+        else: # NETWORK
             is_usb = False
-            host, port = conn_details.get("host"), conn_details.get("port")
+            host = conn_details.get("host")
+            port = int(conn_details.get("port", 5555))
+            if not host:
+                return jsonify({"error": "Network connection requires a host."}), 400
+            
+            # TCP connection is asynchronous, so we can instantiate and use it directly
             adb_client = AdbDeviceTcpAsync(host=host, port=port, default_transport_timeout_s=9.0)
             await adb_client.connect(rsa_keys=[signer], auth_timeout_s=20.0)
-        
+
         _LOGGER.info(f"Successfully connected to device: {conn_details.get('serial') or conn_details.get('host')}")
-        return True
-    except Exception as e:
+        return jsonify({"status": "connected"}), 200
+
+    except (AdbConnectionError, AdbTimeoutError, UsbDeviceNotFoundError, usb1.USBError, ConnectionResetError) as e:
         _LOGGER.error(f"Failed to connect to device: {e}")
         adb_client = None
-        return False
-
-async def _ensure_connection():
-    """Check if the client is available, and if not, try to reconnect using a lock."""
-    async with connection_lock:
-        if adb_client and adb_client.available:
-            return True
-
-        _LOGGER.warning("Connection lost or not established. Attempting to reconnect...")
-        if not connection_details_store:
-            _LOGGER.error("Cannot reconnect: No connection details have been stored.")
-            return False
-        
-        return await _do_connect(connection_details_store)
-
-# --- Quart Web Application ---
-app = Quart(__name__)
-
-@app.before_serving
-async def startup():
-    global signer
-    signer = await _run_sync(_load_or_generate_keys)
-    _LOGGER.info("Frameo ADB Server Initialized.")
-
-# --- API Endpoints ---
-@app.route("/devices/usb", methods=["GET"])
-async def get_usb_devices():
-    _LOGGER.info("Request received for /devices/usb")
-    try:
-        devices = await _run_sync(UsbTransport.find_all_adb_devices)
-        return jsonify([dev.serial_number for dev in devices])
+        return jsonify({"error": f"Connection failed: {e}"}), 500
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        _LOGGER.error(f"An unexpected error occurred during connection: {e}", exc_info=True)
+        adb_client = None
+        return jsonify({"error": f"An unexpected error occurred: {e}"}), 500
 
-@app.route("/connect", methods=["POST"])
-async def connect_device_endpoint():
-    """API endpoint to explicitly connect. This now uses the lock-protected helper."""
-    global connection_details_store
-    connection_details_store = await request.get_json()
-    if not connection_details_store:
-        return jsonify({"error": "Connection details not provided"}), 400
-    
-    success = await _ensure_connection()
-    if success:
-        return jsonify({"status": "connected"}), 200
-    return jsonify({"error": "Connection failed"}), 500
-
-async def _shell_command_with_reconnect(command):
-    """Wrapper for shell commands that ensures connection first."""
+async def _shell_command(command):
+    """Helper to dispatch shell command to the appropriate sync or async client."""
     global adb_client
-    
-    if not await _ensure_connection():
-        return {"error": "Device is not connected and reconnect failed."}, 503
+
+    if not adb_client or not adb_client.available:
+        return {"error": "Device is not connected or available."}, 503
+
     _LOGGER.info(f"Executing shell command: '{command}'")
     try:
         if is_usb:
-            return await _run_sync(adb_client.shell, command), 200
-        return await adb_client.shell(command), 200
-    except (AdbConnectionError, AdbTimeoutError, ConnectionResetError, usb1.USBError) as e:
-        _LOGGER.error(f"ADB Error on shell command '{command}': {e}. Marking connection as lost.")
+            response = await _run_sync(adb_client.shell, command)
+        else:
+            # Run async shell directly
+            response = await adb_client.shell(command)
+        return response, 200
+    except (AdbConnectionError, AdbTimeoutError, ConnectionResetError) as e:
+        _LOGGER.error(f"ADB Error on shell command '{command}': {e}. Connection lost.")
         adb_client = None
         return {"error": str(e)}, 500
 
 @app.route("/state", methods=["POST"])
 async def get_state():
-    response, status_code = await _shell_command_with_reconnect("dumpsys power")
+    _LOGGER.info("Request received for /state")
+    response, status_code = await _shell_command("dumpsys power")
     if status_code >= 400: return jsonify(response), status_code
+    
     is_on = "mWakefulness=Awake" in response
     brightness = 0
     for line in response.splitlines():
@@ -153,29 +169,24 @@ async def get_state():
 async def run_shell_command():
     data = await request.get_json(); command = data.get("command")
     if not command: return jsonify({"error": "Command not provided"}), 400
-    response, status_code = await _shell_command_with_reconnect(command)
+    response, status_code = await _shell_command(command)
     return jsonify({"result": response}), status_code
 
 @app.route("/tcpip", methods=["POST"])
 async def enable_tcpip():
-    """Enables wireless debugging with automatic reconnection."""
-    global adb_client
-    
-    _LOGGER.info("Request received for /tcpip")
-
-    if not await _ensure_connection():
-        return jsonify({"error": "Device is not connected and reconnect failed."}), 503
-
+    """Enables wireless debugging."""
     if not is_usb:
         return jsonify({"error": "tcpip can only be enabled on a USB connection"}), 400
-
+    if not adb_client or not adb_client.available:
+        return jsonify({"error": "USB device is not connected."}), 503
+        
+    _LOGGER.info("Request received for /tcpip")
     try:
         # tcpip is a synchronous command, so it must be run in an executor.
         result = await _run_sync(adb_client.tcpip, 5555)
         return jsonify({"result": result.strip()}), 200
-    except (AdbConnectionError, AdbTimeoutError, ConnectionResetError, usb1.USBError) as e:
-        _LOGGER.error(f"ADB Error on tcpip command: {e}. Marking connection as lost.")
-        adb_client = None # Mark connection as dead
+    except Exception as e:
+        _LOGGER.error(f"ADB Error on tcpip command: {e}")
         return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
