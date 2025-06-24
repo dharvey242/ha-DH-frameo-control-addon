@@ -168,7 +168,13 @@ async def enable_tcpip():
     _LOGGER.info("Request received for /tcpip")
     try:
         port = 5555
-        await _run_sync(adb_client._open, f'tcpip:{port}'.encode('utf-8'))
+        await _run_sync(
+            adb_client._open, 
+            destination=f'tcpip:{port}'.encode('utf-8'),
+            transport_timeout_s=None,
+            read_timeout_s=10.0,
+            timeout_s=None
+        )
         
         return jsonify({"result": f"TCP/IP enabled on port {port}"}), 200
     except Exception as e:
