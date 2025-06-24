@@ -102,6 +102,30 @@ async def startup():
     _LOGGER.info("Frameo ADB Server Initialized.")
 
 # --- API Endpoints ---
+
+@app.route("/health", methods=["GET"])
+async def health_check():
+    """Check the health of the addon and its connection."""
+    if adb_client and adb_client.available:
+        return jsonify({"status": "connected", "details": connection_details_store})
+    return jsonify({"status": "disconnected"})
+
+@app.route("/devices/usb", methods=["GET"])
+async def get_usb_devices():
+    """Scan for and return connected USB ADB devices."""
+    _LOGGER.info("Request received for /devices/usb")
+    try:
+        devices = await _run_sync(UsbTransport.find_all_adb_devices)
+        serials = [dev.serial_number for dev in devices]
+        _LOGGER.info(f"Discovered USB devices: {serials}")
+        return jsonify(serials)
+    except UsbDeviceNotFoundError:
+        _LOGGER.warning("No USB devices found during scan.")
+        return jsonify([])
+    except Exception as e:
+        _LOGGER.error(f"Error finding USB devices: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/connect", methods=["POST"])
 async def connect_device_endpoint():
     """API endpoint to explicitly connect to a device."""
