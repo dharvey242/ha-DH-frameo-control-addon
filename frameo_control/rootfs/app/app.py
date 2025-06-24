@@ -123,6 +123,8 @@ async def connect_device_endpoint():
 
 async def _shell_command_with_reconnect(command):
     """Wrapper for shell commands that ensures connection first."""
+    global adb_client
+    
     if not await _ensure_connection():
         return {"error": "Device is not connected and reconnect failed."}, 503
     _LOGGER.info(f"Executing shell command: '{command}'")
@@ -132,7 +134,6 @@ async def _shell_command_with_reconnect(command):
         return await adb_client.shell(command), 200
     except (AdbConnectionError, AdbTimeoutError, ConnectionResetError, usb1.USBError) as e:
         _LOGGER.error(f"ADB Error on shell command '{command}': {e}. Marking connection as lost.")
-        global adb_client
         adb_client = None
         return {"error": str(e)}, 500
 
