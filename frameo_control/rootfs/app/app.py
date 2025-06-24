@@ -22,6 +22,7 @@ signer = None
 adb_client = None
 is_usb = False
 connection_details_store = {}
+connection_lock = asyncio.Lock()
 
 # --- Helper Functions ---
 def _load_or_generate_keys():
@@ -75,22 +76,24 @@ async def _do_connect(conn_details):
         return {"error": f"An unexpected error occurred: {e}"}, 500
 
 async def _ensure_connection():
-    """Check if the client is available, and if not, try to reconnect."""
+    """Check if the client is available, and if not, try to reconnect using a lock."""
     global adb_client
-    if adb_client and adb_client.available:
-        return True
+    # Don't try to connect if another task is already doing so.
+    async with connection_lock:
+        if adb_client and adb_client.available:
+            return True
 
-    _LOGGER.warning("Connection lost or not established. Attempting to reconnect...")
-    if not connection_details_store:
-        _LOGGER.error("Cannot reconnect: No connection details have been stored.")
+        _LOGGER.warning("Connection lost or not established. Attempting to reconnect...")
+        if not connection_details_store:
+            _LOGGER.error("Cannot reconnect: No connection details have been stored.")
+            return False
+        
+        response, status_code = await _do_connect(connection_details_store)
+        if status_code == 200:
+            return True
+        
+        _LOGGER.error(f"Reconnect failed: {response}")
         return False
-    
-    response, status_code = await _do_connect(connection_details_store)
-    if status_code == 200:
-        return True
-    
-    _LOGGER.error(f"Reconnect failed: {response}")
-    return False
 
 # --- Quart Web Application ---
 app = Quart(__name__)
