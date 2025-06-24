@@ -157,7 +157,7 @@ async def get_usb_devices():
         _LOGGER.error(f"Error finding USB devices: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
-@app.route("/state", methods=["GET"])
+@app.route("/state", methods=["POST"])
 async def get_state():
     _LOGGER.info("Request received for /state")
     response, status_code = await adb_client.shell("dumpsys power")
@@ -184,7 +184,7 @@ async def enable_tcpip():
     response, status_code = await adb_client.tcpip(5555)
     return jsonify(response), status_code
 
-@app.route("/ip", methods=["GET"])
+@app.route("/ip", methods=["POST"])
 async def get_ip_address():
     _LOGGER.info("Request received for /ip")
     response, status_code = await adb_client.shell("ip addr show wlan0")
