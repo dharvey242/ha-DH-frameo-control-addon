@@ -1,35 +1,38 @@
-# HA Frameo Control Backend Add-on
+# Home Assistant Frameo Control Backend Add-on
 
-This is the backend server component for the **HA Frameo Control** integration. It runs as a dedicated Home Assistant Add-on to handle all direct communication with your Frameo device via the Android Debug Bridge (ADB) protocol.
+This repository contains the backend server for the **[HA Frameo Control](https://github.com/HunorLaczko/ha-frameo-control)** integration. This addon runs as a dedicated service inside Home Assistant, handling all direct communication with your Frameo device via the Android Debug Bridge (ADB) protocol.
 
-This add-on is required for the main integration to work. It contains the necessary system libraries (`libusb`) to communicate with the Frameo frame over a USB cable - a feature that is not possible in a standard custom component.
+**This addon is a required dependency.** You must install and run this addon before setting up the main integration.
 
----
+## Why is a separate addon required?
+
+Standard Home Assistant custom components have security restrictions that prevent them from directly accessing host USB devices. This addon is necessary because it contains the required system libraries (like `libusb`) and has the appropriate permissions to communicate with the Frameo frame over a USB cable, which is essential for the initial setup and for reliable control.
+
+## Key Features
+
+* **Enables Direct Device Communication:** Provides the critical link between Home Assistant and your Frameo frame.
+* **USB & Network Support:** Handles both USB-connected ADB and network (Wireless ADB) connections.
+* **Stateful Connection:** Maintains an active connection to the device for responsive control.
+* **Simple API:** Exposes a simple API for the frontend integration to send commands (e.g., tap, swipe, start app).
 
 ## ⚙️ Installation
 
-1. Navigate to the Home Assistant Add-on store.
-2. Click the three-dots menu (⋮) in the top right and select **Repositories**.
-3. Add the URL of this repository.
-4. The "Frameo Control Backend" will appear. Click on it and then click **Install**.
-5. Once installed, move to the **Configuration** tab to set up your device connection.
-
----
+1.  Navigate to your Home Assistant instance.
+2.  Go to **Settings > Add-ons > Add-on Store**.
+3.  Click the three-dots menu (⋮) in the top-right corner and select **Repositories**.
+4.  Add the URL of this repository (`https://github.com/HunorLaczko/ha-frameo-control-addon`) and click **Add**.
+5.  Close the dialog. The "Frameo Control Backend" addon will now appear in the store.
+6.  Click on the new addon and then click **Install**. Wait for the installation to complete.
+7.  **Start** the addon.
 
 ## 🛠️ Configuration
 
-Before starting the add-on, you must configure how it will connect to your Frameo device.
+This addon itself does not require any manual configuration in its "Configuration" tab.
 
-- **Connection Type:**
-  - **USB (Default):** Connect directly to a USB port on your Home Assistant machine. This is the recommended method for initial setup.
-  - **Network:** Connect to the device over your network using its IP address. This requires Wireless ADB to be enabled first.
-- **Device Serial:** (Required for USB) The unique serial number of your device. See the main integration's documentation for instructions on how to find this.
-- **Device Host / Port:** (Required for Network) The IP address and port (usually 5555) of your Frameo device.
-
-After saving the configuration, you can start the add-on from the **Info** tab. Check the **Log** tab to ensure it starts without errors.
-
----
+All setup, such as selecting your USB device or entering a network address, is handled visually by the **HA Frameo Control** integration when you add it in Home Assistant. Just ensure the addon is running before you proceed.
 
 ## ➡️ Next Steps
 
-Once this add-on is installed, configured, and running, you can proceed to install the **HA Frameo Control Frontend Integration** to add the entities to Home Assistant.
+Once this addon is installed and running, you are ready to install the frontend:
+
+➡️ **[Install the HA Frameo Control Integration](https://github.com/HunorLaczko/ha-frameo-control)**
