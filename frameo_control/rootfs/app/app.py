@@ -9,7 +9,7 @@ import usb1
 from adb_shell.adb_device import AdbDevice as AdbDeviceSync, AdbDeviceUsb
 from adb_shell.adb_device_async import AdbDeviceTcpAsync
 from adb_shell.transport.usb_transport import UsbTransport
-from adb_shell.exceptions import AdbConnectionError, AdbTimeoutError, UsbDeviceNotFoundError, DeviceNotFoundError
+from adb_shell.exceptions import AdbConnectionError, AdbTimeoutError, UsbDeviceNotFoundError
 from adb_shell.auth.keygen import keygen
 from adb_shell.auth.sign_pythonrsa import PythonRSASigner
 
@@ -42,7 +42,7 @@ async def _run_sync(func, *args, **kwargs):
     return await loop.run_in_executor(None, partial(func, *args, **kwargs))
 
 def _auth_callback_sync(device_client):
-    """Log a message when auth is needed."""
+    """Log a message when auth is needed. This is only for sync (USB) connections."""
     _LOGGER.info("!!!!!! ACTION REQUIRED !!!!!! Please check your device's screen to 'Allow USB Debugging'.")
 
 # --- Quart Web Application ---
@@ -53,7 +53,7 @@ async def startup():
     """Initialize the ADB signer before starting the server."""
     global signer
     signer = await _run_sync(_load_or_generate_keys)
-    _LOGGER.info("Frameo ADB Client Initialized and ready for connection requests.")
+    _LOGGER.info("Frameo ADB Server Initialized and ready for connection requests.")
 
 # --- API Endpoints ---
 @app.route("/health", methods=["GET"])
@@ -83,7 +83,7 @@ async def get_usb_devices():
 
 @app.route("/connect", methods=["POST"])
 async def connect_device():
-    """Explicitly connect to a device."""
+    """Explicitly connect to a device. This sets the global adb_client."""
     global adb_client, is_usb
     conn_details = await request.get_json()
     if not conn_details:
@@ -99,7 +99,7 @@ async def connect_device():
             if not serial:
                 return jsonify({"error": "USB connection requires a serial number."}), 400
             
-            # USB connection is synchronous
+            # USB connection is synchronous, so we instantiate the sync class
             adb_client = AdbDeviceUsb(serial=serial, default_transport_timeout_s=9.0)
             await _run_sync(adb_client.connect, rsa_keys=[signer], auth_timeout_s=120.0, auth_callback=_auth_callback_sync)
         
@@ -110,14 +110,14 @@ async def connect_device():
             if not host:
                 return jsonify({"error": "Network connection requires a host."}), 400
             
-            # TCP connection is asynchronous
+            # TCP connection is asynchronous, so we can instantiate and use it directly
             adb_client = AdbDeviceTcpAsync(host=host, port=port, default_transport_timeout_s=9.0)
             await adb_client.connect(rsa_keys=[signer], auth_timeout_s=20.0)
 
         _LOGGER.info(f"Successfully connected to device: {conn_details.get('serial') or conn_details.get('host')}")
         return jsonify({"status": "connected"}), 200
 
-    except (AdbConnectionError, AdbTimeoutError, UsbDeviceNotFoundError, DeviceNotFoundError, usb1.USBError, ConnectionResetError) as e:
+    except (AdbConnectionError, AdbTimeoutError, UsbDeviceNotFoundError, usb1.USBError, ConnectionResetError) as e:
         _LOGGER.error(f"Failed to connect to device: {e}")
         adb_client = None
         return jsonify({"error": f"Connection failed: {e}"}), 500
@@ -127,14 +127,13 @@ async def connect_device():
         return jsonify({"error": f"An unexpected error occurred: {e}"}), 500
 
 async def _shell_command(command):
-    """Helper to dispatch shell command to sync or async client."""
+    """Helper to dispatch shell command to the appropriate sync or async client."""
     if not adb_client or not adb_client.available:
         return {"error": "Device is not connected or available."}, 503
 
     _LOGGER.info(f"Executing shell command: '{command}'")
     try:
         if is_usb:
-            # Run sync shell in executor
             response = await _run_sync(adb_client.shell, command)
         else:
             # Run async shell directly
@@ -142,7 +141,8 @@ async def _shell_command(command):
         return response, 200
     except (AdbConnectionError, AdbTimeoutError, ConnectionResetError) as e:
         _LOGGER.error(f"ADB Error on shell command '{command}': {e}. Connection lost.")
-        adb_client = None # Connection is likely dead, reset
+        global adb_client
+        adb_client = None # Connection is likely dead, reset it
         return {"error": str(e)}, 500
 
 @app.route("/state", methods=["POST"])
@@ -176,7 +176,7 @@ async def enable_tcpip():
         
     _LOGGER.info("Request received for /tcpip")
     try:
-        # tcpip is a sync command
+        # tcpip is a synchronous command, so it must be run in an executor.
         result = await _run_sync(adb_client.tcpip, 5555)
         return jsonify({"result": result.strip()}), 200
     except Exception as e:
