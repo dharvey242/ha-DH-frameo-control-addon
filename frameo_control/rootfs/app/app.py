@@ -69,7 +69,6 @@ async def get_usb_devices():
     """Scan for and return connected USB ADB devices."""
     _LOGGER.info("Request received for /devices/usb")
     try:
-        # Finding devices is a synchronous operation
         devices = await _run_sync(UsbTransport.find_all_adb_devices)
         serials = [dev.serial_number for dev in devices]
         _LOGGER.info(f"Discovered USB devices: {serials}")
@@ -128,6 +127,8 @@ async def connect_device():
 
 async def _shell_command(command):
     """Helper to dispatch shell command to the appropriate sync or async client."""
+    global adb_client
+
     if not adb_client or not adb_client.available:
         return {"error": "Device is not connected or available."}, 503
 
@@ -141,8 +142,7 @@ async def _shell_command(command):
         return response, 200
     except (AdbConnectionError, AdbTimeoutError, ConnectionResetError) as e:
         _LOGGER.error(f"ADB Error on shell command '{command}': {e}. Connection lost.")
-        global adb_client
-        adb_client = None # Connection is likely dead, reset it
+        adb_client = None
         return {"error": str(e)}, 500
 
 @app.route("/state", methods=["POST"])
