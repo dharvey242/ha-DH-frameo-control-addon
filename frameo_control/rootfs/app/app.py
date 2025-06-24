@@ -162,16 +162,15 @@ async def run_shell_command():
 @app.route("/tcpip", methods=["POST"])
 async def enable_tcpip():
     """Enables wireless debugging."""
-    if not is_usb:
-        return jsonify({"error": "tcpip can only be enabled on a USB connection"}), 400
-    if not adb_client or not adb_client.available:
-        return jsonify({"error": "USB device is not connected."}), 503
-        
+    if not is_usb or not adb_client or not adb_client.available:
+        return jsonify({"error": "A USB connection is required for this action."}), 400
+    
     _LOGGER.info("Request received for /tcpip")
     try:
-        # tcpip is a synchronous command, so it must be run in an executor.
-        result = await _run_sync(adb_client.tcpip, 5555)
-        return jsonify({"result": result.strip()}), 200
+        port = 5555
+        await _run_sync(adb_client._open, f'tcpip:{port}'.encode('utf-8'))
+        
+        return jsonify({"result": f"TCP/IP enabled on port {port}"}), 200
     except Exception as e:
         _LOGGER.error(f"ADB Error on tcpip command: {e}")
         return jsonify({"error": str(e)}), 500
