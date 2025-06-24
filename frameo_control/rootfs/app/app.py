@@ -52,33 +52,32 @@ async def _do_connect(conn_details):
     conn_type = conn_details.get("connection_type", "USB").upper()
 
     try:
+        # Close any existing connection before creating a new one
+        if adb_client:
+            await _run_sync(adb_client.close) if is_usb else await adb_client.close()
+            adb_client = None
+            _LOGGER.info("Closed existing connection before reconnecting.")
+
         if conn_type == "USB":
             is_usb = True
             serial = conn_details.get("serial")
             adb_client = AdbDeviceUsb(serial=serial, default_transport_timeout_s=9.0)
             await _run_sync(adb_client.connect, rsa_keys=[signer], auth_timeout_s=120.0, auth_callback=_auth_callback_sync)
-        else: # NETWORK
+        else:
             is_usb = False
-            host = conn_details.get("host")
-            port = int(conn_details.get("port", 5555))
+            host, port = conn_details.get("host"), conn_details.get("port")
             adb_client = AdbDeviceTcpAsync(host=host, port=port, default_transport_timeout_s=9.0)
             await adb_client.connect(rsa_keys=[signer], auth_timeout_s=20.0)
         
         _LOGGER.info(f"Successfully connected to device: {conn_details.get('serial') or conn_details.get('host')}")
-        return {"status": "connected"}, 200
-    except (AdbConnectionError, AdbTimeoutError, UsbDeviceNotFoundError, usb1.USBError, ConnectionResetError) as e:
+        return True
+    except Exception as e:
         _LOGGER.error(f"Failed to connect to device: {e}")
         adb_client = None
-        return {"error": f"Connection failed: {e}"}, 500
-    except Exception as e:
-        _LOGGER.error(f"An unexpected error occurred during connection: {e}", exc_info=True)
-        adb_client = None
-        return {"error": f"An unexpected error occurred: {e}"}, 500
+        return False
 
 async def _ensure_connection():
     """Check if the client is available, and if not, try to reconnect using a lock."""
-    global adb_client
-    # Don't try to connect if another task is already doing so.
     async with connection_lock:
         if adb_client and adb_client.available:
             return True
@@ -88,12 +87,7 @@ async def _ensure_connection():
             _LOGGER.error("Cannot reconnect: No connection details have been stored.")
             return False
         
-        response, status_code = await _do_connect(connection_details_store)
-        if status_code == 200:
-            return True
-        
-        _LOGGER.error(f"Reconnect failed: {response}")
-        return False
+        return await _do_connect(connection_details_store)
 
 # --- Quart Web Application ---
 app = Quart(__name__)
@@ -105,57 +99,40 @@ async def startup():
     _LOGGER.info("Frameo ADB Server Initialized.")
 
 # --- API Endpoints ---
-
-@app.route("/health", methods=["GET"])
-async def health_check():
-    """Check the health of the addon and its connection."""
-    if adb_client and adb_client.available:
-        return jsonify({"status": "connected", "details": connection_details_store})
-    return jsonify({"status": "disconnected"})
-
 @app.route("/devices/usb", methods=["GET"])
 async def get_usb_devices():
-    """Scan for and return connected USB ADB devices."""
     _LOGGER.info("Request received for /devices/usb")
     try:
         devices = await _run_sync(UsbTransport.find_all_adb_devices)
-        serials = [dev.serial_number for dev in devices]
-        _LOGGER.info(f"Discovered USB devices: {serials}")
-        return jsonify(serials)
-    except UsbDeviceNotFoundError:
-        _LOGGER.warning("No USB devices found during scan.")
-        return jsonify([])
+        return jsonify([dev.serial_number for dev in devices])
     except Exception as e:
-        _LOGGER.error(f"Error finding USB devices: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 @app.route("/connect", methods=["POST"])
 async def connect_device_endpoint():
-    """API endpoint to explicitly connect to a device."""
+    """API endpoint to explicitly connect. This now uses the lock-protected helper."""
     global connection_details_store
     connection_details_store = await request.get_json()
     if not connection_details_store:
         return jsonify({"error": "Connection details not provided"}), 400
     
-    response, status_code = await _do_connect(connection_details_store)
-    return jsonify(response), status_code
+    success = await _ensure_connection()
+    if success:
+        return jsonify({"status": "connected"}), 200
+    return jsonify({"error": "Connection failed"}), 500
 
 async def _shell_command_with_reconnect(command):
     """Wrapper for shell commands that ensures connection first."""
-    global adb_client
-    
     if not await _ensure_connection():
         return {"error": "Device is not connected and reconnect failed."}, 503
-
     _LOGGER.info(f"Executing shell command: '{command}'")
     try:
         if is_usb:
-            response = await _run_sync(adb_client.shell, command)
-        else:
-            response = await adb_client.shell(command)
-        return response, 200
+            return await _run_sync(adb_client.shell, command), 200
+        return await adb_client.shell(command), 200
     except (AdbConnectionError, AdbTimeoutError, ConnectionResetError, usb1.USBError) as e:
         _LOGGER.error(f"ADB Error on shell command '{command}': {e}. Marking connection as lost.")
+        global adb_client
         adb_client = None
         return {"error": str(e)}, 500
 
@@ -177,15 +154,6 @@ async def run_shell_command():
     if not command: return jsonify({"error": "Command not provided"}), 400
     response, status_code = await _shell_command_with_reconnect(command)
     return jsonify({"result": response}), status_code
-
-@app.route("/ip", methods=["POST"])
-async def get_ip_address():
-    response, status_code = await _shell_command_with_reconnect("ip addr show wlan0")
-    if status_code >= 400: return jsonify(response), status_code
-    if response:
-        match = re.search(r"inet (\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/", response)
-        if match: return jsonify({"ip_address": match.group(1)})
-    return jsonify({"error": "Could not find IP address"}), 404
 
 @app.route("/tcpip", methods=["POST"])
 async def enable_tcpip():
