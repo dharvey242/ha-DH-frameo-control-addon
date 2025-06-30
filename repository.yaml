@@ -1,4 +1,4 @@
 # https://developers.home-assistant.io/docs/add-ons/repository#repository-configuration
-name: 'HA Frameo Control Add-on Repository'
-url: 'https://github.com/HunorLaczko/ha-frameo-control-addon'
+name: 'HA DH Frameo Control Add-on Repository'
+url: 'https://github.com/dharvey242/ha-dh-frameo-control-addon'
 maintainer: 'Hunor Laczko'
